@@ -64,6 +64,7 @@ const (
 	copyStatusFilled
 )
 
+// TODO: remove the list of sources
 type copier struct {
 	dst  []byte
 	src  []byte
@@ -129,7 +130,7 @@ type reader struct {
 	err     error
 	eof     bool
 	done    bool
-	phantom bool
+	partial bool
 }
 
 func newReader(r io.Reader, re replacer, buf []byte) *reader {
@@ -141,6 +142,7 @@ func newReader(r io.Reader, re replacer, buf []byte) *reader {
 	}
 }
 
+// TODO: rewrite as a limited state machine.
 func (r *reader) Read(dst []byte) (int, error) {
 	var (
 		n, m     int
@@ -181,9 +183,9 @@ func (r *reader) Read(dst []byte) (int, error) {
 				return n, r.err
 			}
 			if res != MatchResMore {
-				if r.phantom {
+				if r.partial {
 					r.cp.from(r.re.matched(r.lastpos))
-					r.phantom = false
+					r.partial = false
 					r.done = true
 					return n, r.err
 				}
@@ -192,7 +194,7 @@ func (r *reader) Read(dst []byte) (int, error) {
 		}
 		r.cp.from(r.buf[r.start:r.stop])
 		if res == MatchResMore {
-			r.phantom = true
+			r.partial = true
 		} else {
 			r.done = true
 		}
