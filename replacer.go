@@ -127,7 +127,6 @@ func newReader(r io.Reader, re replacer, buf []byte) *reader {
 		reader: r,
 		re:     re,
 		buf:    buf,
-		cp:     copier{dst: make([]byte, 0)},
 	}
 }
 
