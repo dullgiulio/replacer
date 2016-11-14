@@ -69,6 +69,7 @@ type copier struct {
 
 func (c *copier) from(buf []byte) {
 	c.src = buf
+	c.psrc = 0
 }
 
 func (c *copier) to(buf []byte) {
