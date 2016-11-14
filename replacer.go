@@ -10,7 +10,6 @@ type replacer interface {
 	match(c byte) (MatchRes, int)
 	matched(int) []byte
 	replacement() []byte
-	reset()
 }
 
 type MatchRes int
@@ -29,10 +28,6 @@ type bytestream struct {
 
 func newBytestream(src, dst []byte) *bytestream {
 	return &bytestream{src: src, dst: dst}
-}
-
-func (b *bytestream) reset() {
-	b.pos = 0
 }
 
 func (b *bytestream) match(c byte) (MatchRes, int) {
@@ -64,17 +59,15 @@ const (
 	copyStatusFilled
 )
 
-// TODO: remove the list of sources
 type copier struct {
 	dst  []byte
 	src  []byte
-	srcs [][]byte
 	pdst int
 	psrc int
 }
 
-func (c *copier) from(bufs ...[]byte) {
-	c.srcs = append(c.srcs, bufs...)
+func (c *copier) from(buf []byte) {
+	c.src = buf
 }
 
 func (c *copier) to(buf []byte) {
@@ -86,7 +79,7 @@ func (c *copier) copy() (int, copyStatus) {
 	if c.dst == nil {
 		return 0, copyStatusFilled
 	}
-	if len(c.srcs) == 0 {
+	if c.src == nil {
 		return 0, copyStatusDrained
 	}
 	var n int
@@ -95,12 +88,8 @@ func (c *copier) copy() (int, copyStatus) {
 			return n, copyStatusFilled
 		}
 		if c.src == nil || c.psrc >= len(c.src) {
-			if len(c.srcs) == 0 {
-				return n, copyStatusDrained
-			}
-			c.src = c.srcs[0]
 			c.psrc = 0
-			c.srcs = c.srcs[1:]
+			return n, copyStatusDrained
 		}
 		// Longes amount we can copy
 		ddst := len(c.dst) - c.pdst
@@ -128,9 +117,11 @@ type reader struct {
 	length  int
 	lastpos int
 	err     error
+	// TODO: Make a single status variable
 	eof     bool
 	done    bool
 	partial bool
+	replace bool
 }
 
 func newReader(r io.Reader, re replacer, buf []byte) *reader {
@@ -156,9 +147,14 @@ func (r *reader) Read(dst []byte) (int, error) {
 		if cpstatus == copyStatusFilled {
 			return n, r.err
 		}
-		if cpstatus == copyStatusDrained && r.done == true {
+		if cpstatus == copyStatusDrained && (r.done || r.replace) {
 			if r.eof {
 				return n, io.EOF
+			}
+			if r.replace {
+				r.cp.from(r.re.replacement())
+				r.replace = false
+				continue
 			}
 			r.length, err = r.reader.Read(r.buf)
 			if err == io.EOF {
@@ -177,7 +173,8 @@ func (r *reader) Read(dst []byte) (int, error) {
 		for i := r.start; i < r.length; i++ {
 			res, r.lastpos = r.re.match(r.buf[i])
 			if res == MatchResDone {
-				r.cp.from(r.buf[r.start:r.stop], r.re.replacement())
+				r.cp.from(r.buf[r.start:r.stop])
+				r.replace = true
 				r.stop = i + 1
 				r.start = r.stop
 				return n, r.err
