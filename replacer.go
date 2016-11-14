@@ -7,8 +7,10 @@ import (
 )
 
 type replacer interface {
-	match(c byte) MatchRes
+	match(c byte) (MatchRes, int)
+	matched(int) []byte
 	replacement() []byte
+	reset()
 }
 
 type MatchRes int
@@ -29,17 +31,26 @@ func newBytestream(src, dst []byte) *bytestream {
 	return &bytestream{src: src, dst: dst}
 }
 
-func (b *bytestream) match(c byte) MatchRes {
+func (b *bytestream) reset() {
+	b.pos = 0
+}
+
+func (b *bytestream) match(c byte) (MatchRes, int) {
 	if c != b.src[b.pos] {
+		p := b.pos
 		b.pos = 0
-		return MatchResNone
+		return MatchResNone, p
 	}
 	b.pos++
 	if b.pos >= len(b.src) {
 		b.pos = 0
-		return MatchResDone
+		return MatchResDone, 0
 	}
-	return MatchResMore
+	return MatchResMore, b.pos
+}
+
+func (b *bytestream) matched(p int) []byte {
+	return b.src[0:p]
 }
 
 func (b *bytestream) replacement() []byte {
@@ -107,13 +118,18 @@ func (c *copier) copy() (int, copyStatus) {
 }
 
 type reader struct {
-	reader io.Reader
-	buf    []byte
-	re     replacer
-	cp     copier
-	start  int
-	stop   int
-	lenght int
+	reader  io.Reader
+	buf     []byte
+	re      replacer
+	cp      copier
+	start   int
+	stop    int
+	length  int
+	lastpos int
+	err     error
+	eof     bool
+	done    bool
+	phantom bool
 }
 
 func newReader(r io.Reader, re replacer, buf []byte) *reader {
@@ -127,47 +143,66 @@ func newReader(r io.Reader, re replacer, buf []byte) *reader {
 
 func (r *reader) Read(dst []byte) (int, error) {
 	var (
-		n        int
+		n, m     int
 		err      error
 		cpstatus copyStatus
 	)
 	r.cp.to(dst)
-Outer:
 	for {
-		n, cpstatus = r.cp.copy()
+		m, cpstatus = r.cp.copy()
+		n = n + m
 		if cpstatus == copyStatusFilled {
-			break
+			return n, r.err
 		}
-		if cpstatus == copyStatusDrained {
-			r.lenght, err = r.reader.Read(r.buf)
-			if r.lenght == 0 {
-				break
+		if cpstatus == copyStatusDrained && r.done == true {
+			if r.eof {
+				return n, io.EOF
+			}
+			r.length, err = r.reader.Read(r.buf)
+			if err == io.EOF {
+				r.eof = true
+				if r.length == 0 {
+					return n, io.EOF
+				}
+			} else {
+				r.err = err
 			}
 			r.start = 0
 			r.stop = 0
+			r.done = false
 		}
-		for i := 0; i < r.lenght; i++ {
-			res := r.re.match(r.buf[i])
+		var res MatchRes
+		for i := r.start; i < r.length; i++ {
+			res, r.lastpos = r.re.match(r.buf[i])
 			if res == MatchResDone {
 				r.cp.from(r.buf[r.start:r.stop], r.re.replacement())
-				r.start = i + 1
-				r.stop = r.start
-				continue Outer
+				r.stop = i + 1
+				r.start = r.stop
+				return n, r.err
 			}
 			if res != MatchResMore {
-				r.stop++
+				if r.phantom {
+					r.cp.from(r.re.matched(r.lastpos))
+					r.phantom = false
+					r.done = true
+					return n, r.err
+				}
+				r.stop = i + 1
 			}
 		}
-		if r.start < r.stop {
-			r.cp.from(r.buf[r.start:r.stop])
+		r.cp.from(r.buf[r.start:r.stop])
+		if res == MatchResMore {
+			r.phantom = true
+		} else {
+			r.done = true
 		}
 	}
-	return n, err
+	return n, r.err
 }
 
 func main() {
-	var buf [3]byte
-	bs := newBytestream([]byte("aa"), []byte("xxx"))
-	r := newReader(bytes.NewReader([]byte("aa bb cc aaaaa\n")), bs, buf[:])
+	var buf [10]byte
+	bs := newBytestream([]byte("cloud"), []byte("toilet"))
+	r := newReader(bytes.NewReader([]byte("Your clode lives in the cloud!\n")), bs, buf[:])
 	io.Copy(os.Stdout, r)
 }
