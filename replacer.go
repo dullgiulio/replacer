@@ -52,6 +52,7 @@ func (b *bytestream) replacement() []byte {
 	return b.dst
 }
 
+// TODO: remove, make simple boolean
 type copyStatus int
 
 const (
@@ -77,34 +78,30 @@ func (c *copier) to(buf []byte) {
 
 func (c *copier) copy() (int, copyStatus) {
 	if c.dst == nil {
+		c.pdst = 0
 		return 0, copyStatusFilled
 	}
-	if c.src == nil {
+	if c.src == nil || c.psrc >= len(c.src) {
+		c.psrc = 0
 		return 0, copyStatusDrained
 	}
-	var n int
-	for {
-		if c.pdst > len(c.dst) {
-			return n, copyStatusFilled
-		}
-		if c.src == nil || c.psrc >= len(c.src) {
-			c.psrc = 0
-			return n, copyStatusDrained
-		}
-		// Longes amount we can copy
-		ddst := len(c.dst) - c.pdst
-		dist := len(c.src) - c.psrc
-		if dist > ddst {
-			dist = ddst
-		}
-		for i := 0; i < dist; i++ {
-			c.dst[c.pdst] = c.src[c.psrc]
-			c.pdst++
-			c.psrc++
-		}
-		n = n + dist
+	// Longes amount we can copy
+	ddst := cap(c.dst) - c.pdst
+	dist := len(c.src) - c.psrc
+	if dist > ddst {
+		dist = ddst
 	}
-	return n, copyStatusDrained
+	for i := 0; i < dist; i++ {
+		c.dst[c.pdst] = c.src[c.psrc]
+		c.pdst++
+		c.psrc++
+	}
+	if c.pdst > cap(c.dst) {
+		c.pdst = 0
+		return dist, copyStatusFilled
+	}
+	c.psrc = 0
+	return dist, copyStatusDrained
 }
 
 type reader struct {
@@ -117,8 +114,8 @@ type reader struct {
 	length  int
 	lastpos int
 	err     error
-	// TODO: Make a single status variable
 	eof     bool
+	// TODO: Make a single status variable
 	done    bool
 	partial bool
 	replace bool
